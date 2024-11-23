@@ -3,13 +3,7 @@ using System.Diagnostics;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Threading;
-using Microsoft.Diagnostics.Tracing;
-using Microsoft.Diagnostics.Tracing.Parsers;
-using Microsoft.Diagnostics.Tracing.Session;
-using System.Threading.Tasks;
-using System.Management;
-using System.Threading;
-using Microsoft.Diagnostics.Tracing.Parsers.Kernel;
+using LibreHardwareMonitor.Hardware;
 
 namespace windows_full_widget
 {
@@ -18,10 +12,13 @@ namespace windows_full_widget
         private PerformanceCounter? cpuCounter;
         private DispatcherTimer? timer;
         private float gpuUsage;
+        private float gpuTemperature;
+        private Computer computer;
 
         public MainWindow()
         {
             InitializeComponent();
+            computer = new Computer();
             InitializeCpuCounter();
             StartCpuUsageUpdate();
             StartGpuUsageUpdate();
@@ -39,46 +36,56 @@ namespace windows_full_widget
             timer.Tick += Timer_Tick;
             timer.Start();
         }
+
         private void Timer_Tick(object? sender, EventArgs e)
         {
             float cpuUsage = cpuCounter?.NextValue() ?? 0.0f;
             CpuUsageText.Text = $"CPU: {cpuUsage:F1}%";
             GpuUsageText.Text = $"GPU: {gpuUsage:F1}%";
+            GpuTempText.Text = $"GPU Temp: {gpuTemperature:F1}°C";
         }
 
         private void StartGpuUsageUpdate()
-{
-    Task.Run(() =>
-    {
-        while (true)
         {
-            try
+            computer = new Computer
             {
-                using (var searcher = new ManagementObjectSearcher("root\\CIMV2", "SELECT * FROM Win32_PerfFormattedData_GPUPerformanceCounters_GPUEngine"))
+                IsGpuEnabled = true
+            };
+            computer.Open();
+
+            Task.Run(() =>
+            {
+                while (true)
                 {
-                    var gpuLoad = 0.0f;
-                    foreach (ManagementObject obj in searcher.Get())
+                    foreach (var hardwareItem in computer.Hardware)
                     {
-                        gpuLoad += Convert.ToSingle(obj["UtilizationPercentage"]);
+                        if (hardwareItem.HardwareType == HardwareType.GpuNvidia || hardwareItem.HardwareType == HardwareType.GpuAmd)
+                        {
+                            hardwareItem.Update();
+                            foreach (var sensor in hardwareItem.Sensors)
+                            {
+                                if (sensor.SensorType == SensorType.Load && sensor.Name == "GPU Core")
+                                {
+                                    gpuUsage = sensor.Value.GetValueOrDefault();
+                                }
+                                if (sensor.SensorType == SensorType.Temperature && sensor.Name == "GPU Core")
+                                {
+                                    gpuTemperature = sensor.Value.GetValueOrDefault();
+                                }
+                            }
+                        }
                     }
 
-                    gpuUsage = gpuLoad;
-                    
                     Dispatcher.Invoke(() =>
                     {
                         GpuUsageText.Text = $"GPU: {gpuUsage:F1}%";
+                        GpuTempText.Text = $"GPU Temp: {gpuTemperature:F1}°C";
                     });
-                }
-            }
-            catch (Exception)
-            {
-                gpuUsage = 0.0f;
-            }
 
-            Thread.Sleep(1000); // Update every second
+                    Thread.Sleep(1000);
+                }
+            });
         }
-    });
-}
 
         private void Grid_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
         {
